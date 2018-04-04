@@ -1,170 +1,161 @@
-import { async, fakeAsync, TestBed, tick } from '@angular/core/testing';
+import { TestBed } from '@angular/core/testing';
 
 import { CitiesUploadComponent } from './cities-upload.component';
 import { SearchCityService } from '../search-city.service';
 import { Subject } from 'rxjs/Subject';
 import { HttpClientModule, HttpEventType, HttpResponse } from '@angular/common/http';
-import { DateTime } from 'luxon';
 import { GlobeNgbModule } from '../globe-ngb/globe-ngb.module';
 
-class FakeNow {
-  private now = DateTime.local();
+/**
+ * TODO: those codes can be removed after new version of angular released.
+ */
+declare let Zone: any;
+const { fakeAsync, tick } = Zone['__zone_symbol__fakeAsyncTest'];
+const async = Zone['__zone_symbol__asyncTest'];
 
-  constructor() {
-    jasmine.clock().mockDate(this.now.toJSDate());
-  }
+fdescribe('CitiesUploadComponent', () => {
+  beforeEach(
+    async(() => {
+      TestBed.configureTestingModule({
+        imports: [GlobeNgbModule.forRoot(), HttpClientModule],
+        declarations: [CitiesUploadComponent],
+        providers: [SearchCityService]
+      });
+    })
+  );
 
-  tickSeconds(seconds: number) {
-    this.now = this.now.plus({ seconds });
-    jasmine.clock().mockDate(this.now.toJSDate());
-    tick(seconds * 1000);
-  }
-}
+  it(
+    'should upload',
+    fakeAsync(() => {
+      const cityService = TestBed.get(SearchCityService);
+      const component = new CitiesUploadComponent(cityService);
 
-describe('CitiesUploadComponent', () => {
+      expect(component.status).toBe('pending');
 
-  beforeEach(async(() => {
-    TestBed.configureTestingModule({
-      imports: [GlobeNgbModule.forRoot(), HttpClientModule],
-      declarations: [CitiesUploadComponent],
-      providers: [SearchCityService]
-    });
-  }));
+      const fileChangeEvent = {
+        target: {
+          files: ['fakeFile']
+        }
+      } as any;
 
-  afterEach(() => jasmine.clock().uninstall());
+      const fileReader = new FileReader();
+      spyOn(fileReader, 'readAsText');
 
-  it('should upload', fakeAsync(() => {
-    const cityService = TestBed.get(SearchCityService);
-    const component = new CitiesUploadComponent(cityService);
+      spyOn(component, '_createFileReader').and.returnValue(fileReader);
 
-    expect(component.status).toBe('pending');
+      component.upload(fileChangeEvent);
+      expect(fileReader.onload).toBeDefined();
+      expect(fileReader.readAsText).toHaveBeenCalledWith('fakeFile', 'UTF8');
 
-    const fileChangeEvent = {
-      target: {
-        files: ['fakeFile']
-      }
-    } as any;
+      const fileLoadedEvent: any = {
+        target: {
+          result: 'fakeFileContent'
+        }
+      };
 
-    const fileReader = new FileReader();
-    spyOn(fileReader, 'readAsText');
+      const fakeEvents = new Subject<any>();
+      spyOn(cityService, 'uploadCities').and.returnValue(fakeEvents);
 
-    spyOn(component, '_createFileReader').and.returnValue(fileReader);
+      fileReader.onload(fileLoadedEvent);
+      expect(component.status).toBe('uploading');
 
-    const fakeNow = new FakeNow();
+      tick(5000);
+      fakeEvents.next({
+        type: HttpEventType.UploadProgress,
+        loaded: 5,
+        total: 10
+      });
 
-    component.upload(fileChangeEvent);
-    expect(fileReader.onload).toBeDefined();
-    expect(fileReader.readAsText).toHaveBeenCalledWith('fakeFile', 'UTF8');
+      // upload is halfway and has taken 5 seconds. Estimated processing time is 20 seconds
+      // so total time is 30 seconds and we're thus at 5 / 30
+      expect(component.progress).toBe(5 / 30);
 
-    const fileLoadedEvent: any = {
-      target: {
-        result: 'fakeFileContent'
-      }
-    };
+      tick(5000);
+      fakeEvents.next({
+        type: HttpEventType.UploadProgress,
+        loaded: 10,
+        total: 10
+      });
 
-    const fakeEvents = new Subject<any>();
-    spyOn(cityService, 'uploadCities').and.returnValue(fakeEvents);
+      expect(component.progress).toBe(10 / 30);
+      expect(component.status).toBe('processing');
 
-    fileReader.onload(fileLoadedEvent);
-    expect(component.status).toBe('uploading');
+      tick(10000);
+      expect(component.progress).toBe(20 / 30);
 
-    // emit first progress event after 5 seconds
-    fakeNow.tickSeconds(5);
-    fakeEvents.next({
-      type: HttpEventType.UploadProgress,
-      loaded: 5,
-      total: 10
-    });
+      tick(5000);
+      expect(component.progress).toBe(25 / 30);
 
-    // upload is halfway and has taken 5 seconds. Estimated processing time is 20 seconds
-    // so total time is 30 seconds and we're thus at 5 / 30
-    expect(component.progress).toBe(5 / 30);
+      tick(6000);
+      expect(component.progress).toBeLessThan(1);
+      expect(component.status).toBe('processing');
 
-    // emit last progress events
-    fakeNow.tickSeconds(5);
-    fakeEvents.next({
-      type: HttpEventType.UploadProgress,
-      loaded: 10,
-      total: 10
-    });
+      // emit response and complete
+      fakeEvents.next(new HttpResponse());
+      fakeEvents.complete();
+      expect(component.progress).toBe(1);
+      expect(component.status).toBe('done');
+    })
+  );
 
-    expect(component.progress).toBe(10 / 30);
-    expect(component.status).toBe('processing');
+  it(
+    'should finish if response comes back early',
+    fakeAsync(() => {
+      const cityService = TestBed.get(SearchCityService);
+      const component = new CitiesUploadComponent(cityService);
 
-    fakeNow.tickSeconds(10);
-    expect(component.progress).toBe(20 / 30);
+      expect(component.status).toBe('pending');
 
-    fakeNow.tickSeconds(5);
-    expect(component.progress).toBe(25 / 30);
+      const fileChangeEvent = {
+        target: {
+          files: ['fakeFile']
+        }
+      } as any;
 
-    fakeNow.tickSeconds(6);
-    expect(component.progress).toBeLessThan(1);
-    expect(component.status).toBe('processing');
+      const fileReader = new FileReader();
+      spyOn(fileReader, 'readAsText');
+      spyOn(component, '_createFileReader').and.returnValue(fileReader);
 
-    // emit response and complete
-    fakeEvents.next(new HttpResponse());
-    fakeEvents.complete();
-    expect(component.progress).toBe(1);
-    expect(component.status).toBe('done');
-  }));
+      component.upload(fileChangeEvent);
+      expect(fileReader.onload).toBeDefined();
+      expect(fileReader.readAsText).toHaveBeenCalledWith('fakeFile', 'UTF8');
 
-  it('should finish if response comes back early', fakeAsync(() => {
-    const cityService = TestBed.get(SearchCityService);
-    const component = new CitiesUploadComponent(cityService);
+      const fileLoadedEvent: any = {
+        target: {
+          result: 'fakeFileContent'
+        }
+      };
 
-    expect(component.status).toBe('pending');
+      const fakeEvents = new Subject<any>();
+      spyOn(cityService, 'uploadCities').and.returnValue(fakeEvents);
 
-    const fileChangeEvent = {
-      target: {
-        files: ['fakeFile']
-      }
-    } as any;
+      fileReader.onload(fileLoadedEvent);
+      expect(component.status).toBe('uploading');
 
-    const fileReader = new FileReader();
-    spyOn(fileReader, 'readAsText');
-    spyOn(component, '_createFileReader').and.returnValue(fileReader);
+      // emit last progress events
+      tick(10000);
+      fakeEvents.next({
+        type: HttpEventType.UploadProgress,
+        loaded: 10,
+        total: 10
+      });
 
-    const fakeNow = new FakeNow();
+      expect(component.progress).toBe(10 / 30);
+      expect(component.status).toBe('processing');
 
-    component.upload(fileChangeEvent);
-    expect(fileReader.onload).toBeDefined();
-    expect(fileReader.readAsText).toHaveBeenCalledWith('fakeFile', 'UTF8');
+      tick(15000);
+      expect(component.progress).toBe(25 / 30);
 
-    const fileLoadedEvent: any = {
-      target: {
-        result: 'fakeFileContent'
-      }
-    };
+      // emit response and complete
+      fakeEvents.next(new HttpResponse());
+      fakeEvents.complete();
+      expect(component.progress).toBe(1);
+      expect(component.status).toBe('done');
 
-    const fakeEvents = new Subject<any>();
-    spyOn(cityService, 'uploadCities').and.returnValue(fakeEvents);
-
-    fileReader.onload(fileLoadedEvent);
-    expect(component.status).toBe('uploading');
-
-    // emit last progress events
-    fakeNow.tickSeconds(10);
-    fakeEvents.next({
-      type: HttpEventType.UploadProgress,
-      loaded: 10,
-      total: 10
-    });
-
-    expect(component.progress).toBe(10 / 30);
-    expect(component.status).toBe('processing');
-
-    fakeNow.tickSeconds(15);
-    expect(component.progress).toBe(25 / 30);
-
-    // emit response and complete
-    fakeEvents.next(new HttpResponse());
-    fakeEvents.complete();
-    expect(component.progress).toBe(1);
-    expect(component.status).toBe('done');
-
-    // let the fake event observable a chance to realize that the processing is done
-    fakeNow.tickSeconds(1);
-  }));
+      // let the fake event observable a chance to realize that the processing is done
+      tick(1000);
+    })
+  );
 
   it('should display an info message and a file upload control, and no progress', () => {
     const fixture = TestBed.createComponent(CitiesUploadComponent);
