@@ -21,7 +21,7 @@ class FakeNow {
   }
 }
 
-describe('CitiesUploadComponent', () => {
+fdescribe('CitiesUploadComponent', () => {
 
   beforeEach(async(() => {
     TestBed.configureTestingModule({
